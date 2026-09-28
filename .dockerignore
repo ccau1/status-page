@@ -1,0 +1,10 @@
+node_modules
+packages/web/node_modules
+packages/web/dist
+.git
+.air
+tmp
+bin
+*.db
+*.db-journal
+data

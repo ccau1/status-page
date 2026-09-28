@@ -1,0 +1,104 @@
+services:
+  auth:
+    build:
+      context: .
+      dockerfile: packages/auth/Dockerfile
+      target: dev
+    container_name: status-page-auth
+    ports:
+      - "${AUTH_GRPC_PORT:-50051}:50051"
+    volumes:
+      - .:/app
+    environment:
+      - PORT=50051
+      - AUTH_GRPC_PORT=50051
+      - SSO_PROVIDER=${SSO_PROVIDER:-mock}
+      - SSO_PROVIDER_NAME=${SSO_PROVIDER_NAME:-Local Dev SSO}
+      - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URL=${OIDC_REDIRECT_URL:-/auth/callback}
+      - SSO_SUCCESS_REDIRECT_URL=${SSO_SUCCESS_REDIRECT_URL:-/admin}
+      - SESSION_SECRET=${SESSION_SECRET:-dev-secret-key-please-change-in-production-12345678}
+      - PASSWORD_AUTH_ENABLED=${PASSWORD_AUTH_ENABLED:-true}
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - LOCAL_USERS=${LOCAL_USERS:-}
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+      target: dev
+    container_name: status-page-api
+    ports:
+      - "${API_PORT:-8085}:8080"
+    volumes:
+      - .:/app
+      - data:/data
+    environment:
+      - PORT=8080
+      - AUTH_GRPC_ADDR=auth:50051
+      - STORAGE_ENGINE=${STORAGE_ENGINE:-sqlite}
+      - SQLITE_DSN=${SQLITE_DSN:-/data/status.db}
+      - DYNAMODB_TABLE=${DYNAMODB_TABLE:-status_records}
+      - DYNAMODB_ENDPOINT=${DYNAMODB_ENDPOINT:-}
+      - S3_BUCKET=${S3_BUCKET:-status-page-bucket}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - INCIDENT_BANNER_JSON=${INCIDENT_BANNER_JSON:-}
+      - COOKIE_NAME=status_session
+      - SSO_PROVIDER=${SSO_PROVIDER:-mock}
+      - SSO_PROVIDER_NAME=${SSO_PROVIDER_NAME:-Local Dev SSO}
+      - SSO_SUCCESS_REDIRECT_URL=${SSO_SUCCESS_REDIRECT_URL:-/admin}
+    depends_on:
+      - auth
+    restart: unless-stopped
+
+  status-probe-worker:
+    build:
+      context: .
+      dockerfile: packages/status-probe-worker/Dockerfile
+      target: dev
+    container_name: status-page-probe-worker
+    volumes:
+      - .:/app
+      - data:/data
+    environment:
+      - STORAGE_ENGINE=${STORAGE_ENGINE:-sqlite}
+      - SQLITE_DSN=${SQLITE_DSN:-/data/status.db}
+      - DYNAMODB_TABLE=${DYNAMODB_TABLE:-status_records}
+      - DYNAMODB_ENDPOINT=${DYNAMODB_ENDPOINT:-}
+      - S3_BUCKET=${S3_BUCKET:-status-page-bucket}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - WORKER_LOOP_INTERVAL=${WORKER_LOOP_INTERVAL:-5s}
+      - STATUS_DEF_JSON=${STATUS_DEF_JSON:-}
+      - STATUS_DEF_FILE=${STATUS_DEF_FILE:-}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./packages/web
+      dockerfile: Dockerfile
+      target: dev
+    container_name: status-page-web
+    ports:
+      - "${WEB_PORT:-3001}:3000"
+    volumes:
+      - ./packages/web:/app
+      - /app/node_modules
+    environment:
+      - PORT=3000
+      - NODE_ENV=${NODE_ENV:-development}
+      - API_BACKEND_URL=http://api:8080
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  data:
+    name: status-page-data

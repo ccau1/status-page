@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package auth;
+
+option go_package = "status-page/packages/auth/proto";
+
+// AuthService provides stateless enterprise SSO, credentials, and token verification.
+service AuthService {
+  // Login authenticates credentials and returns a signed stateless session token.
+  rpc Login (LoginRequest) returns (LoginResponse);
+
+  // Register provisions a new user and returns a signed session token.
+  rpc Register (RegisterRequest) returns (RegisterResponse);
+
+  // Logout clears/invalidates the session.
+  rpc Logout (LogoutRequest) returns (LogoutResponse);
+
+  // ForgotPassword generates a stateless signed password reset token.
+  rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
+
+  // ResetPassword verifies the reset token and issues a new session.
+  rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);
+
+  // VerifyToken validates a JWT token and returns authenticated user claims.
+  rpc VerifyToken (VerifyTokenRequest) returns (VerifyTokenResponse);
+
+  // GetOIDCAuthURL generates the SSO redirect URL for Microsoft AD / Okta.
+  rpc GetOIDCAuthURL (GetOIDCAuthURLRequest) returns (GetOIDCAuthURLResponse);
+
+  // HandleOIDCCallback exchanges an SSO authorization code for a session token.
+  rpc HandleOIDCCallback (HandleOIDCCallbackRequest) returns (HandleOIDCCallbackResponse);
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  bool success = 1;
+  string token = 2;
+  User user = 3;
+  string message = 4;
+}
+
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+  string email = 3;
+  string name = 4;
+}
+
+message RegisterResponse {
+  bool success = 1;
+  string token = 2;
+  User user = 3;
+  string message = 4;
+}
+
+message LogoutRequest {
+  string token = 1;
+}
+
+message LogoutResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ForgotPasswordRequest {
+  string email = 1;
+}
+
+message ForgotPasswordResponse {
+  bool success = 1;
+  string message = 2;
+  string reset_token = 3; // In development/mock mode, returns token directly
+}
+
+message ResetPasswordRequest {
+  string reset_token = 1;
+  string new_password = 2;
+}
+
+message ResetPasswordResponse {
+  bool success = 1;
+  string token = 2;
+  User user = 3;
+  string message = 4;
+}
+
+message VerifyTokenRequest {
+  string token = 1;
+}
+
+message VerifyTokenResponse {
+  bool valid = 1;
+  bool is_admin = 2;
+  User user = 3;
+  string error = 4;
+}
+
+message GetOIDCAuthURLRequest {
+  string state = 1;
+}
+
+message GetOIDCAuthURLResponse {
+  string url = 1;
+}
+
+message HandleOIDCCallbackRequest {
+  string code = 1;
+}
+
+message HandleOIDCCallbackResponse {
+  bool success = 1;
+  string token = 2;
+  User user = 3;
+  string message = 4;
+}
+
+message User {
+  string email = 1;
+  string name = 2;
+  repeated string roles = 3;
+  string tenant = 4;
+}

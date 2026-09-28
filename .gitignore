@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build artifacts
+dist/
+build/
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.tsbuildinfo
+.vite/
+
+# Hot reload & temporary files
+tmp/
+.air/
+*.tmp
+
+# Databases & local storage
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+
+# Environment and sensitive files
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS & Editor files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
