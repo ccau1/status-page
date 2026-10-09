@@ -182,6 +182,50 @@ func (s *S3Adapter) SaveStatus(ctx context.Context, status *domain.Status) error
 	return nil
 }
 
+// ClaimStatus attempts to acquire an exclusive evaluation lease on a status item for leaseDuration.
+func (s *S3Adapter) ClaimStatus(ctx context.Context, tenant string, product string, workerID string, leaseDuration time.Duration) (bool, error) {
+	leaseKey := fmt.Sprintf("leases/%s/%s.json", tenant, product)
+	now := time.Now().UTC()
+
+	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(leaseKey),
+	})
+	if err == nil {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var lease struct {
+			WorkerID  string    `json:"worker_id"`
+			ExpiresAt time.Time `json:"expires_at"`
+		}
+		if json.Unmarshal(bodyBytes, &lease) == nil {
+			if now.Before(lease.ExpiresAt) && lease.WorkerID != workerID {
+				return false, nil
+			}
+		}
+	}
+
+	leaseData, err := json.Marshal(map[string]interface{}{
+		"worker_id":  workerID,
+		"expires_at": now.Add(leaseDuration),
+	})
+	if err != nil {
+		return false, err
+	}
+
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(leaseKey),
+		Body:        bytes.NewReader(leaseData),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to write lease to s3: %w", err)
+	}
+
+	return true, nil
+}
+
 func (s *S3Adapter) GetActiveIncidents(ctx context.Context, tenant string) ([]domain.Incident, error) {
 	prefixes := []string{
 		fmt.Sprintf("incidents/%s/", tenant),

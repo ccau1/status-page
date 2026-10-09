@@ -29,6 +29,8 @@ logs:
 test:
 	@echo "Running Go tests..."
 	go test status-page/packages/core/... status-page/packages/auth/... status-page/packages/api/... status-page/packages/status-probe-worker/...
+	@echo "Running Playwright Runner tests..."
+	npm --prefix packages/playwright-runner test
 	@echo "Running Web frontend tests..."
 	npm --prefix packages/web test
 
@@ -37,6 +39,8 @@ build:
 	@echo "Building Go API & Worker..."
 	cd packages/api && go build -o ../../bin/api .
 	cd packages/status-probe-worker && go build -o ../../bin/worker .
+	@echo "Building Playwright Runner..."
+	npm --prefix packages/playwright-runner run build
 	@echo "Building Web frontend..."
 	npm --prefix packages/web run build
 

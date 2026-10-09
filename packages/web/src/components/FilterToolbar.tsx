@@ -17,6 +17,9 @@ interface FilterToolbarProps {
     degraded: number;
     outage: number;
   };
+  allRegions: string[];
+  selectedRegion: string | 'all';
+  onRegionSelect: (r: string | 'all') => void;
 }
 
 export const FilterToolbar: React.FC<FilterToolbarProps> = ({
@@ -29,6 +32,9 @@ export const FilterToolbar: React.FC<FilterToolbarProps> = ({
   selectedState,
   onStateSelect,
   featureCounts,
+  allRegions,
+  selectedRegion,
+  onRegionSelect,
 }) => {
   const navigate = useNavigate();
 
@@ -100,6 +106,32 @@ export const FilterToolbar: React.FC<FilterToolbarProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Region Filter Chips (only when per-region check data exists) */}
+      {allRegions.length > 0 && (
+        <div className="feature-state-filters" role="group" aria-label="Filter by Region">
+          <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginRight: '6px', fontWeight: 600 }}>
+            Region Filter:
+          </span>
+
+          <button
+            className={`filter-chip ${selectedRegion === 'all' ? 'active' : ''}`}
+            onClick={() => onRegionSelect('all')}
+          >
+            All Regions
+          </button>
+
+          {allRegions.map((region) => (
+            <button
+              key={region}
+              className={`filter-chip ${selectedRegion === region ? 'active' : ''}`}
+              onClick={() => onRegionSelect(region)}
+            >
+              {region}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Feature Health State Filter Chips */}
       <div className="feature-state-filters">

@@ -73,3 +73,21 @@ Once all checks complete:
    * **Degraded:** If any feature is `degraded` and none are in `outage`.
    * **Maintenance:** If all active features are in planned maintenance.
    * **Operational:** If operational features exist without outages or degradation.
+
+---
+
+## 🌐 5. Multi-Pod Coordination (EKS & ECS)
+
+The worker supports horizontal scaling across multiple pods or tasks without duplicating check execution:
+
+### A. AWS ECS Task Scaling & EKS Deployments (Dynamic Lease Claiming)
+* When multiple workers run (e.g. an ECS Service with `desired_count: N` sharing a single Task Definition, or an EKS Deployment with `replicas: N`):
+* Workers compete for outdated items using atomic lease claiming (`StoragePort.ClaimStatus`):
+  * **DynamoDB:** Conditional update (`attribute_not_exists(claimed_until) OR claimed_until <= :now OR claimed_by = :worker_id`).
+  * **SQLite:** Atomic conditional SQL update (`WHERE claimed_until <= :now`).
+* If worker A holds the lease, workers B and C skip that item immediately. If worker A terminates mid-check, the lease automatically expires after `WORKER_LEASE_DURATION` (default 30s) and is picked up on the next cycle.
+
+### B. EKS StatefulSets (Deterministic Hash Sharding)
+* In Kubernetes StatefulSets, pods have ordinal names (`status-probe-worker-0`, `status-probe-worker-1`).
+* Workers auto-detect their ordinal index from the hostname when `WORKER_SHARD_TOTAL > 1`.
+* Each worker only evaluates items matching `fnv32a(tenant + "/" + product) % shard_total == shard_index`, eliminating database lock contention entirely.

@@ -76,8 +76,31 @@ services:
       - WORKER_LOOP_INTERVAL=${WORKER_LOOP_INTERVAL:-5s}
       - STATUS_DEF_JSON=${STATUS_DEF_JSON:-}
       - STATUS_DEF_FILE=${STATUS_DEF_FILE:-}
+      - PLAYWRIGHT_RUNNER_URL=${PLAYWRIGHT_RUNNER_URL:-http://playwright-runner:8088/run}
+      - WORKER_SHARD_INDEX=${WORKER_SHARD_INDEX:-}
+      - WORKER_SHARD_TOTAL=${WORKER_SHARD_TOTAL:-1}
+      - WORKER_ID=${WORKER_ID:-}
+      - WORKER_LEASE_ENABLED=${WORKER_LEASE_ENABLED:-true}
+      - WORKER_LEASE_DURATION=${WORKER_LEASE_DURATION:-30s}
     depends_on:
       - api
+      - playwright-runner
+    restart: unless-stopped
+
+  playwright-runner:
+    build:
+      context: .
+      dockerfile: packages/playwright-runner/Dockerfile
+      target: dev
+    container_name: status-page-playwright-runner
+    ports:
+      - "${PLAYWRIGHT_RUNNER_PORT:-8088}:8088"
+    volumes:
+      - ./packages/playwright-runner:/app
+      - /app/node_modules
+    environment:
+      - PORT=8088
+      - NODE_ENV=${NODE_ENV:-development}
     restart: unless-stopped
 
   web:

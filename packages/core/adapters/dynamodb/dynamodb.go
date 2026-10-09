@@ -24,6 +24,7 @@ type DynamoDBClientAPI interface {
 	CreateTable(ctx context.Context, params *dynamodb.CreateTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error)
 	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
 	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error)
 	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
 	Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
 }
@@ -36,15 +37,18 @@ type DynamoDBAdapter struct {
 var _ ports.StoragePort = (*DynamoDBAdapter)(nil)
 
 type ddbRecord struct {
-	PK               string `dynamodbav:"PK"` // TENANT#<tenant>
-	SK               string `dynamodbav:"SK"` // PRODUCT#<product>
-	Tenant           string `dynamodbav:"tenant"`
-	Product          string `dynamodbav:"product"`
-	CurrentState     string `dynamodbav:"current_state"`
-	Message          string `dynamodbav:"message"`
-	FeaturesJSON     string `dynamodbav:"features_json"`
-	CheckResultsJSON string `dynamodbav:"check_results_json"`
-	LastUpdatedUnix  int64  `dynamodbav:"last_updated"`
+	PK                   string `dynamodbav:"PK"` // TENANT#<tenant>
+	SK                   string `dynamodbav:"SK"` // PRODUCT#<product>
+	Tenant               string `dynamodbav:"tenant"`
+	Product              string `dynamodbav:"product"`
+	CurrentState         string `dynamodbav:"current_state"`
+	Message              string `dynamodbav:"message"`
+	FeaturesJSON         string `dynamodbav:"features_json"`
+	RegionalFeaturesJSON string `dynamodbav:"regional_features_json,omitempty"`
+	CheckResultsJSON     string `dynamodbav:"check_results_json"`
+	LastUpdatedUnix      int64  `dynamodbav:"last_updated"`
+	ClaimedUntilUnix     int64  `dynamodbav:"claimed_until,omitempty"`
+	ClaimedBy            string `dynamodbav:"claimed_by,omitempty"`
 }
 
 // New creates a new DynamoDBAdapter using AWS SDK config.
@@ -230,21 +234,31 @@ func (d *DynamoDBAdapter) SaveStatus(ctx context.Context, status *domain.Status)
 		return fmt.Errorf("failed to marshal check results: %w", err)
 	}
 
+	var regionalJSON string
+	if len(status.RegionalFeatures) > 0 {
+		b, err := json.Marshal(status.RegionalFeatures)
+		if err != nil {
+			return fmt.Errorf("failed to marshal regional features: %w", err)
+		}
+		regionalJSON = string(b)
+	}
+
 	var lastUpdatedUnix int64
 	if !status.LastUpdated.IsZero() {
 		lastUpdatedUnix = status.LastUpdated.UTC().Unix()
 	}
 
 	rec := ddbRecord{
-		PK:               fmt.Sprintf("TENANT#%s", status.Tenant),
-		SK:               fmt.Sprintf("PRODUCT#%s", status.Product),
-		Tenant:           status.Tenant,
-		Product:          status.Product,
-		CurrentState:     string(status.CurrentState),
-		Message:          status.Message,
-		FeaturesJSON:     string(featJSON),
-		CheckResultsJSON: string(checkJSON),
-		LastUpdatedUnix:  lastUpdatedUnix,
+		PK:                   fmt.Sprintf("TENANT#%s", status.Tenant),
+		SK:                   fmt.Sprintf("PRODUCT#%s", status.Product),
+		Tenant:               status.Tenant,
+		Product:              status.Product,
+		CurrentState:         string(status.CurrentState),
+		Message:              status.Message,
+		FeaturesJSON:         string(featJSON),
+		RegionalFeaturesJSON: regionalJSON,
+		CheckResultsJSON:     string(checkJSON),
+		LastUpdatedUnix:      lastUpdatedUnix,
 	}
 
 	item, err := attributevalue.MarshalMap(rec)
@@ -261,6 +275,41 @@ func (d *DynamoDBAdapter) SaveStatus(ctx context.Context, status *domain.Status)
 	}
 
 	return nil
+}
+
+// ClaimStatus attempts to acquire an exclusive evaluation lease on a status item for leaseDuration.
+func (d *DynamoDBAdapter) ClaimStatus(ctx context.Context, tenant string, product string, workerID string, leaseDuration time.Duration) (bool, error) {
+	nowUnix := time.Now().UTC().Unix()
+	untilUnix := time.Now().UTC().Add(leaseDuration).Unix()
+
+	pk := fmt.Sprintf("TENANT#%s", tenant)
+	sk := fmt.Sprintf("PRODUCT#%s", product)
+
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(d.tableName),
+		Key: map[string]ddbtypes.AttributeValue{
+			"PK": &ddbtypes.AttributeValueMemberS{Value: pk},
+			"SK": &ddbtypes.AttributeValueMemberS{Value: sk},
+		},
+		UpdateExpression:    aws.String("SET claimed_until = :until, claimed_by = :worker_id"),
+		ConditionExpression: aws.String("attribute_not_exists(claimed_until) OR claimed_until <= :now OR claimed_by = :worker_id"),
+		ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
+			":until":     &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(untilUnix, 10)},
+			":worker_id": &ddbtypes.AttributeValueMemberS{Value: workerID},
+			":now":       &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(nowUnix, 10)},
+		},
+	})
+
+	if err != nil {
+		var condErr *ddbtypes.ConditionalCheckFailedException
+		var transCondErr *ddbtypes.TransactionCanceledException
+		if errors.As(err, &condErr) || errors.As(err, &transCondErr) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim status in dynamodb for %s/%s: %w", tenant, product, err)
+	}
+
+	return true, nil
 }
 
 type ddbIncidentRecord struct {
@@ -391,6 +440,9 @@ func recordToStatus(rec *ddbRecord) (*domain.Status, error) {
 
 	if rec.FeaturesJSON != "" {
 		_ = json.Unmarshal([]byte(rec.FeaturesJSON), &st.Features)
+	}
+	if rec.RegionalFeaturesJSON != "" {
+		_ = json.Unmarshal([]byte(rec.RegionalFeaturesJSON), &st.RegionalFeatures)
 	}
 	if rec.CheckResultsJSON != "" {
 		_ = json.Unmarshal([]byte(rec.CheckResultsJSON), &st.CheckResults)

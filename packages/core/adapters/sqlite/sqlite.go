@@ -44,8 +44,11 @@ func (s *SQLiteAdapter) Init(ctx context.Context) error {
 		current_state TEXT NOT NULL,
 		message TEXT,
 		features_json TEXT NOT NULL,
+		regional_features_json TEXT,
 		check_results_json TEXT,
 		last_updated INTEGER NOT NULL,
+		claimed_until INTEGER DEFAULT 0,
+		claimed_by TEXT DEFAULT '',
 		PRIMARY KEY(tenant, product)
 	);
 	CREATE INDEX IF NOT EXISTS idx_statuses_last_updated ON statuses(last_updated);
@@ -74,6 +77,9 @@ func (s *SQLiteAdapter) Init(ctx context.Context) error {
 	}
 
 	// Automatic schema migration for existing databases: ensure newly added columns exist
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE statuses ADD COLUMN regional_features_json TEXT;")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE statuses ADD COLUMN claimed_until INTEGER DEFAULT 0;")
+	_, _ = s.db.ExecContext(ctx, "ALTER TABLE statuses ADD COLUMN claimed_by TEXT DEFAULT '';")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE incidents ADD COLUMN products_json TEXT;")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE incidents ADD COLUMN check_ids_json TEXT;")
 	_, _ = s.db.ExecContext(ctx, "ALTER TABLE incidents ADD COLUMN features_json TEXT;")
@@ -84,7 +90,7 @@ func (s *SQLiteAdapter) Init(ctx context.Context) error {
 // GetStatus retrieves a single product status for a tenant.
 func (s *SQLiteAdapter) GetStatus(ctx context.Context, tenant string, product string) (*domain.Status, error) {
 	query := `
-	SELECT tenant, product, current_state, message, features_json, check_results_json, last_updated
+	SELECT tenant, product, current_state, message, features_json, regional_features_json, check_results_json, last_updated
 	FROM statuses
 	WHERE tenant = ? AND product = ?
 	`
@@ -92,9 +98,10 @@ func (s *SQLiteAdapter) GetStatus(ctx context.Context, tenant string, product st
 
 	var st domain.Status
 	var featJSON, checkJSON string
+	var regionalJSON sql.NullString
 	var lastUpdatedUnix int64
 
-	err := row.Scan(&st.Tenant, &st.Product, &st.CurrentState, &st.Message, &featJSON, &checkJSON, &lastUpdatedUnix)
+	err := row.Scan(&st.Tenant, &st.Product, &st.CurrentState, &st.Message, &featJSON, &regionalJSON, &checkJSON, &lastUpdatedUnix)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -116,6 +123,12 @@ func (s *SQLiteAdapter) GetStatus(ctx context.Context, tenant string, product st
 		st.Features = make(map[string]domain.FeatureStatus)
 	}
 
+	if regionalJSON.Valid && regionalJSON.String != "" {
+		if err := json.Unmarshal([]byte(regionalJSON.String), &st.RegionalFeatures); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal regional features: %w", err)
+		}
+	}
+
 	if checkJSON != "" {
 		if err := json.Unmarshal([]byte(checkJSON), &st.CheckResults); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal check results: %w", err)
@@ -128,7 +141,7 @@ func (s *SQLiteAdapter) GetStatus(ctx context.Context, tenant string, product st
 // ListStatusesByTenant returns all products for a given tenant.
 func (s *SQLiteAdapter) ListStatusesByTenant(ctx context.Context, tenant string) ([]domain.Status, error) {
 	query := `
-	SELECT tenant, product, current_state, message, features_json, check_results_json, last_updated
+	SELECT tenant, product, current_state, message, features_json, regional_features_json, check_results_json, last_updated
 	FROM statuses
 	WHERE tenant = ?
 	ORDER BY product ASC
@@ -145,7 +158,7 @@ func (s *SQLiteAdapter) ListStatusesByTenant(ctx context.Context, tenant string)
 // ListAllStatuses returns all products for all tenants.
 func (s *SQLiteAdapter) ListAllStatuses(ctx context.Context) ([]domain.Status, error) {
 	query := `
-	SELECT tenant, product, current_state, message, features_json, check_results_json, last_updated
+	SELECT tenant, product, current_state, message, features_json, regional_features_json, check_results_json, last_updated
 	FROM statuses
 	ORDER BY tenant ASC, product ASC
 	`
@@ -162,7 +175,7 @@ func (s *SQLiteAdapter) ListAllStatuses(ctx context.Context) ([]domain.Status, e
 func (s *SQLiteAdapter) GetOutdatedStatuses(ctx context.Context, olderThan time.Duration) ([]domain.Status, error) {
 	thresholdUnix := time.Now().UTC().Add(-olderThan).Unix()
 	query := `
-	SELECT tenant, product, current_state, message, features_json, check_results_json, last_updated
+	SELECT tenant, product, current_state, message, features_json, regional_features_json, check_results_json, last_updated
 	FROM statuses
 	WHERE last_updated < ?
 	ORDER BY last_updated ASC
@@ -183,6 +196,16 @@ func (s *SQLiteAdapter) SaveStatus(ctx context.Context, status *domain.Status) e
 		return fmt.Errorf("failed to marshal features: %w", err)
 	}
 
+	var regionalJSON *string
+	if len(status.RegionalFeatures) > 0 {
+		b, err := json.Marshal(status.RegionalFeatures)
+		if err != nil {
+			return fmt.Errorf("failed to marshal regional features: %w", err)
+		}
+		s := string(b)
+		regionalJSON = &s
+	}
+
 	checkJSON, err := json.Marshal(status.CheckResults)
 	if err != nil {
 		return fmt.Errorf("failed to marshal check results: %w", err)
@@ -194,14 +217,17 @@ func (s *SQLiteAdapter) SaveStatus(ctx context.Context, status *domain.Status) e
 	}
 
 	query := `
-	INSERT INTO statuses (tenant, product, current_state, message, features_json, check_results_json, last_updated)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO statuses (tenant, product, current_state, message, features_json, regional_features_json, check_results_json, last_updated, claimed_until, claimed_by)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '')
 	ON CONFLICT(tenant, product) DO UPDATE SET
 		current_state = excluded.current_state,
 		message = excluded.message,
 		features_json = excluded.features_json,
+		regional_features_json = excluded.regional_features_json,
 		check_results_json = excluded.check_results_json,
-		last_updated = excluded.last_updated
+		last_updated = excluded.last_updated,
+		claimed_until = 0,
+		claimed_by = ''
 	`
 	_, err = s.db.ExecContext(ctx, query,
 		status.Tenant,
@@ -209,6 +235,7 @@ func (s *SQLiteAdapter) SaveStatus(ctx context.Context, status *domain.Status) e
 		string(status.CurrentState),
 		status.Message,
 		string(featJSON),
+		regionalJSON,
 		string(checkJSON),
 		lastUpdatedUnix,
 	)
@@ -218,14 +245,39 @@ func (s *SQLiteAdapter) SaveStatus(ctx context.Context, status *domain.Status) e
 	return nil
 }
 
+// ClaimStatus attempts to acquire an exclusive evaluation lease on a status item for leaseDuration.
+func (s *SQLiteAdapter) ClaimStatus(ctx context.Context, tenant string, product string, workerID string, leaseDuration time.Duration) (bool, error) {
+	nowUnix := time.Now().UTC().Unix()
+	untilUnix := time.Now().UTC().Add(leaseDuration).Unix()
+
+	query := `
+	UPDATE statuses
+	SET claimed_until = ?, claimed_by = ?
+	WHERE tenant = ? AND product = ?
+	  AND (claimed_until IS NULL OR claimed_until <= ? OR claimed_by = ?)
+	`
+	res, err := s.db.ExecContext(ctx, query, untilUnix, workerID, tenant, product, nowUnix, workerID)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim status for %s/%s: %w", tenant, product, err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect rows affected for claim: %w", err)
+	}
+
+	return rows > 0, nil
+}
+
 func (s *SQLiteAdapter) scanRows(rows *sql.Rows) ([]domain.Status, error) {
 	var list []domain.Status
 	for rows.Next() {
 		var st domain.Status
 		var featJSON, checkJSON string
+		var regionalJSON sql.NullString
 		var lastUpdatedUnix int64
 
-		if err := rows.Scan(&st.Tenant, &st.Product, &st.CurrentState, &st.Message, &featJSON, &checkJSON, &lastUpdatedUnix); err != nil {
+		if err := rows.Scan(&st.Tenant, &st.Product, &st.CurrentState, &st.Message, &featJSON, &regionalJSON, &checkJSON, &lastUpdatedUnix); err != nil {
 			return nil, fmt.Errorf("failed to scan status row: %w", err)
 		}
 		if lastUpdatedUnix > 0 {
@@ -238,6 +290,9 @@ func (s *SQLiteAdapter) scanRows(rows *sql.Rows) ([]domain.Status, error) {
 		}
 		if st.Features == nil {
 			st.Features = make(map[string]domain.FeatureStatus)
+		}
+		if regionalJSON.Valid && regionalJSON.String != "" {
+			_ = json.Unmarshal([]byte(regionalJSON.String), &st.RegionalFeatures)
 		}
 		if checkJSON != "" {
 			_ = json.Unmarshal([]byte(checkJSON), &st.CheckResults)

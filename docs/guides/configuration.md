@@ -44,6 +44,68 @@ Controlled via the `STORAGE_ENGINE` variable:
 | `STATUS_DEF_JSON` | *(built-in defaults)* | Raw JSON string defining all products, pull intervals, and health checks |
 | `STATUS_DEF_FILE` | *(empty)* | Path to a local `.json` file containing the status check configurations |
 
+### Health Check Definition Fields
+
+Each entry in `STATUS_DEF_JSON` groups checks under a `tenant` + `product`. A check supports:
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | ✅ | Unique check identifier |
+| `feature` | ✅ | Feature key this check validates; multiple checks can share one feature |
+| `region` | optional | Region tag (e.g. `us-east-1`). Checks with a region also feed a per-region feature breakdown (`regional_features` in the status payload), which powers the region filter on the status page. Checks without a region only feed the global rollup |
+| `type` | ✅ | Check method: `http`, `tcp`, `synthetic`, etc. |
+| `target` | ✅ | URL or `host:port` to probe |
+| `timeout_ms` | optional | Per-check timeout override |
+| `parameters` | optional | Type-specific options (e.g. `simulated_state` for `synthetic`) |
+
+The global feature state is always the worst case across all its checks, so a regional outage still degrades the product-level view.
+
+### Tenant Templates (Document Form)
+
+When many tenants monitor the same products, `STATUS_DEF_JSON` (or `STATUS_DEF_FILE`) can use the **document form** instead of a bare array. Define each product+check set once under `templates`, then bind tenants to it under `items`:
+
+```json
+{
+  "templates": {
+    "standard-billing": {
+      "product": "billing-engine",
+      "pull_interval_seconds": 20,
+      "checks": [
+        {
+          "id": "tax-check",
+          "feature": "tax-calc",
+          "region": "{{region}}",
+          "type": "tcp",
+          "target": "tax.{{tenant}}.cloud.internal:443"
+        }
+      ]
+    }
+  },
+  "items": [
+    { "tenant": "acme", "template": "standard-billing",
+      "variables": { "region": "us-east-1" } },
+    { "tenant": "globex", "template": "standard-billing",
+      "pull_interval_seconds": 60,
+      "variables": { "region": "eu-west-1" },
+      "check_overrides": [
+        { "id": "tax-check", "timeout_ms": 8000 },
+        { "id": "fraud-check", "feature": "fraud-scan", "type": "tcp",
+          "target": "fraud.globex.internal:9000" },
+        { "id": "stripe-check", "remove": true }
+      ]
+    }
+  ]
+}
+```
+
+Rules:
+
+* **Variables** — `{{tenant}}` and `{{product}}` are built in; `items[].variables` adds more (and wins on collision). Substitution applies to all check string fields and `parameters` values, including on inline (template-less) items. An unresolved `{{var}}` fails startup with a descriptive error.
+* **Scalar overrides** — `product` / `pull_interval_seconds` on an item override the template's values.
+* **`check_overrides`** merge by check `id`, applied in order: matching IDs are field-merged (non-empty fields win; `parameters` merge per-key), unknown IDs are appended as new checks (must be fully defined), and `"remove": true` drops a check (error if the ID doesn't exist).
+* Items without a `template` behave exactly like legacy array entries. The legacy bare-array form keeps working unchanged — both forms are detected automatically.
+* Expansion happens once at worker startup; templates themselves are never validated until expanded per tenant.
+
 ---
 
 ## 🌐 Web & API Server Settings
@@ -91,7 +153,7 @@ You can publish, update, and manage incident announcements across the top of the
     "id": "inc-001",
     "tenant": "*",
     "products": ["billing-engine"],
-    "check_ids": ["tax-jurisdiction-check"],
+    "check_ids": ["tax-jurisdiction-check-eu"],
     "features": ["tax-calc"],
     "title": "Elevated Latency in Tax Calculation Service",
     "severity": "minor",

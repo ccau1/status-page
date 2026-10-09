@@ -2,9 +2,11 @@ package dynamodb_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
@@ -69,6 +71,43 @@ func (m *mockDDBClient) Scan(ctx context.Context, params *dynamodb.ScanInput, op
 	return &dynamodb.ScanOutput{Items: list}, nil
 }
 
+func (m *mockDDBClient) UpdateItem(ctx context.Context, params *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	pk := params.Key["PK"].(*ddbtypes.AttributeValueMemberS).Value
+	sk := params.Key["SK"].(*ddbtypes.AttributeValueMemberS).Value
+	key := pk + "#" + sk
+	item, ok := m.items[key]
+	if !ok {
+		item = make(map[string]ddbtypes.AttributeValue)
+		item["PK"] = params.Key["PK"]
+		item["SK"] = params.Key["SK"]
+		m.items[key] = item
+	}
+
+	if untilAttr, exists := item["claimed_until"]; exists {
+		var untilVal int64
+		if n, ok := untilAttr.(*ddbtypes.AttributeValueMemberN); ok {
+			untilVal, _ = strconv.ParseInt(n.Value, 10, 64)
+		}
+		nowVal, _ := strconv.ParseInt(params.ExpressionAttributeValues[":now"].(*ddbtypes.AttributeValueMemberN).Value, 10, 64)
+		workerIDVal := params.ExpressionAttributeValues[":worker_id"].(*ddbtypes.AttributeValueMemberS).Value
+		var claimedBy string
+		if cb, ok := item["claimed_by"].(*ddbtypes.AttributeValueMemberS); ok {
+			claimedBy = cb.Value
+		}
+
+		if untilVal > nowVal && claimedBy != workerIDVal {
+			return nil, &ddbtypes.ConditionalCheckFailedException{
+				Message: aws.String("The conditional request failed"),
+			}
+		}
+	}
+
+	item["claimed_until"] = params.ExpressionAttributeValues[":until"]
+	item["claimed_by"] = params.ExpressionAttributeValues[":worker_id"]
+
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
 func TestDynamoDBAdapter_SaveAndGet(t *testing.T) {
 	client := newMockDDBClient()
 	adapter := ddbadapter.NewWithClient(client, "test-table")
@@ -103,5 +142,38 @@ func TestDynamoDBAdapter_SaveAndGet(t *testing.T) {
 	}
 	if fetched.Tenant != "tenant-2" || fetched.Product != "billing" {
 		t.Errorf("unexpected status returned: %+v", fetched)
+	}
+}
+
+func TestDynamoDBAdapter_ClaimStatus(t *testing.T) {
+	client := newMockDDBClient()
+	adapter := ddbadapter.NewWithClient(client, "test-table")
+	ctx := context.Background()
+
+	// 1. Initial claim should succeed
+	claimed, err := adapter.ClaimStatus(ctx, "acme", "api", "worker-1", 10*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error claiming: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("expected worker-1 to acquire lease")
+	}
+
+	// 2. Worker 1 renewing should succeed
+	claimed, err = adapter.ClaimStatus(ctx, "acme", "api", "worker-1", 10*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error re-claiming: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("expected worker-1 to renew lease")
+	}
+
+	// 3. Worker 2 attempting to claim active lease should fail
+	claimed, err = adapter.ClaimStatus(ctx, "acme", "api", "worker-2", 10*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error on conflict: %v", err)
+	}
+	if claimed {
+		t.Fatalf("expected worker-2 to be rejected due to active lease")
 	}
 }

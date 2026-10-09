@@ -25,8 +25,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("[Worker] Configuration error: invalid status item definitions: %v", err)
 	}
-	log.Printf("[Worker] Validated configuration successfully: %d status items defined, loop interval: %v",
-		len(cfg.Items), cfg.LoopSleepInterval)
+	log.Printf("[Worker] Validated configuration: %d items, interval: %v, worker_id: %s, shard: %d/%d, lease_enabled: %v",
+		len(cfg.Items), cfg.LoopSleepInterval, cfg.WorkerID, cfg.WorkerShardIndex, cfg.WorkerShardTotal, cfg.WorkerLeaseEnabled)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -51,6 +51,18 @@ func TestSQLiteAdapter(t *testing.T) {
 				LatencyMs:   45,
 			},
 		},
+		RegionalFeatures: map[string]map[string]domain.FeatureStatus{
+			"eu-west-1": {
+				"payments": {
+					ID:          "payments",
+					Name:        "Credit Card Processing",
+					Region:      "eu-west-1",
+					State:       domain.StateDegraded,
+					LastChecked: now,
+					LatencyMs:   210,
+				},
+			},
+		},
 		CheckResults: []domain.CheckResult{
 			{
 				CheckID:   "chk-1",
@@ -85,6 +97,10 @@ func TestSQLiteAdapter(t *testing.T) {
 	if len(fetched.Features) != 1 || fetched.Features["payments"].LatencyMs != 45 {
 		t.Errorf("features not unmarshaled correctly: %+v", fetched.Features)
 	}
+	euFeat, ok := fetched.RegionalFeatures["eu-west-1"]["payments"]
+	if !ok || euFeat.State != domain.StateDegraded || euFeat.Region != "eu-west-1" || euFeat.LatencyMs != 210 {
+		t.Errorf("regional features not unmarshaled correctly: %+v", fetched.RegionalFeatures)
+	}
 
 	// 4. List by tenant
 	byTenant, err := adapter.ListStatusesByTenant(ctx, "acme")
@@ -114,5 +130,71 @@ func TestSQLiteAdapter(t *testing.T) {
 	}
 	if len(outdated) != 1 {
 		t.Fatalf("expected 1 outdated status, got %d", len(outdated))
+	}
+}
+
+func TestSQLiteAdapter_ClaimStatus(t *testing.T) {
+	tempDB := filepath.Join(t.TempDir(), "test_claim.db")
+	adapter, err := sqlite.New(tempDB)
+	if err != nil {
+		t.Fatalf("failed to create adapter: %v", err)
+	}
+	defer adapter.Close()
+
+	ctx := context.Background()
+	if err := adapter.Init(ctx); err != nil {
+		t.Fatalf("failed to init adapter: %v", err)
+	}
+
+	// Insert initial status
+	st := &domain.Status{
+		Tenant:       "tenant-1",
+		Product:      "service-a",
+		CurrentState: domain.StateOperational,
+		Features:     make(map[string]domain.FeatureStatus),
+	}
+	if err := adapter.SaveStatus(ctx, st); err != nil {
+		t.Fatalf("failed to save initial status: %v", err)
+	}
+
+	// 1. Worker 1 claims status -> should succeed
+	claimed, err := adapter.ClaimStatus(ctx, "tenant-1", "service-a", "worker-1", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error claiming: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("expected worker-1 to claim successfully")
+	}
+
+	// 2. Worker 1 renews claim -> should succeed
+	claimed, err = adapter.ClaimStatus(ctx, "tenant-1", "service-a", "worker-1", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error re-claiming: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("expected worker-1 to renew successfully")
+	}
+
+	// 3. Worker 2 attempts claim while lease active -> should fail
+	claimed, err = adapter.ClaimStatus(ctx, "tenant-1", "service-a", "worker-2", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error claiming worker-2: %v", err)
+	}
+	if claimed {
+		t.Fatalf("expected worker-2 to be rejected due to active lease")
+	}
+
+	// 4. SaveStatus clears lease -> Worker 2 can now claim
+	st.LastUpdated = time.Now().UTC()
+	if err := adapter.SaveStatus(ctx, st); err != nil {
+		t.Fatalf("failed to save status: %v", err)
+	}
+
+	claimed, err = adapter.ClaimStatus(ctx, "tenant-1", "service-a", "worker-2", 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error claiming worker-2 after save: %v", err)
+	}
+	if !claimed {
+		t.Fatalf("expected worker-2 to acquire claim after save reset")
 	}
 }

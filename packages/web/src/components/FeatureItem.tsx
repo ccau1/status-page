@@ -11,6 +11,11 @@ export const FeatureItem: React.FC<FeatureItemProps> = ({ feature }) => {
       <div className="feature-meta">
         <div className="feature-title-line">
           <h3>{feature.name || feature.id}</h3>
+          {feature.region && (
+            <span className="latency-pill" style={{ marginLeft: '8px' }} title="Region-specific status">
+              {feature.region}
+            </span>
+          )}
         </div>
         {feature.description && (
           <div className="feature-description">{feature.description}</div>

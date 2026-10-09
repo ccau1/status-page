@@ -31,6 +31,7 @@ export const StatusPage: React.FC = () => {
   // In-page feature filters
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedState, setSelectedState] = useState<StatusState | 'all'>('all');
+  const [selectedRegion, setSelectedRegion] = useState<string | 'all'>('all');
 
   const loadData = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
@@ -67,6 +68,28 @@ export const StatusPage: React.FC = () => {
     return statuses.filter((s) => s.product.toLowerCase() === product.toLowerCase());
   }, [statuses, product]);
 
+  // Regions available across displayed products (from per-region check data)
+  const allRegions = useMemo(() => {
+    const set = new Set<string>();
+    displayedStatuses.forEach((s) => {
+      Object.keys(s.regional_features ?? {}).forEach((r) => set.add(r));
+    });
+    return Array.from(set).sort();
+  }, [displayedStatuses]);
+
+  // Effective feature map for a product given the selected region:
+  // regional entries override the global entry for the same feature.
+  const getEffectiveFeatures = useCallback(
+    (status: Status): Record<string, FeatureStatus> => {
+      if (selectedRegion === 'all') return status.features;
+      return {
+        ...status.features,
+        ...(status.regional_features?.[selectedRegion] ?? {}),
+      };
+    },
+    [selectedRegion]
+  );
+
   // Calculate overall state across displayed products
   const overallState = useMemo<StatusState>(() => {
     if (displayedStatuses.length === 0) return 'operational';
@@ -81,14 +104,14 @@ export const StatusPage: React.FC = () => {
   const affectedFeatures = useMemo(() => {
     const list: string[] = [];
     displayedStatuses.forEach((st) => {
-      Object.values(st.features).forEach((feat) => {
+      Object.values(getEffectiveFeatures(st)).forEach((feat) => {
         if (feat.state !== 'operational') {
           list.push(`${feat.name || feat.id} (${st.product})`);
         }
       });
     });
     return list;
-  }, [displayedStatuses]);
+  }, [displayedStatuses, getEffectiveFeatures]);
 
   // Compute in-page feature counts across current displayed products
   const featureCounts = useMemo(() => {
@@ -98,7 +121,7 @@ export const StatusPage: React.FC = () => {
     let outage = 0;
 
     displayedStatuses.forEach((prod) => {
-      Object.values(prod.features).forEach((feat) => {
+      Object.values(getEffectiveFeatures(prod)).forEach((feat) => {
         all++;
         if (feat.state === 'operational') operational++;
         else if (feat.state === 'degraded') degraded++;
@@ -107,13 +130,13 @@ export const StatusPage: React.FC = () => {
     });
 
     return { all, operational, degraded, outage };
-  }, [displayedStatuses]);
+  }, [displayedStatuses, getEffectiveFeatures]);
 
   // Helper to filter features within a product card
-  const getFilteredFeatures = useCallback((featuresMap: Record<string, FeatureStatus>): FeatureStatus[] => {
+  const getFilteredFeatures = useCallback((status: Status): FeatureStatus[] => {
     const query = searchQuery.trim().toLowerCase();
 
-    return Object.values(featuresMap).filter((feat) => {
+    return Object.values(getEffectiveFeatures(status)).filter((feat) => {
       // 1. Filter by search query
       if (query) {
         const nameMatch = feat.name?.toLowerCase().includes(query);
@@ -129,7 +152,7 @@ export const StatusPage: React.FC = () => {
 
       return true;
     });
-  }, [searchQuery, selectedState]);
+  }, [searchQuery, selectedState, getEffectiveFeatures]);
 
   const latestUpdatedTimestamp = useMemo(() => {
     if (displayedStatuses.length === 0) return '';
@@ -173,6 +196,9 @@ export const StatusPage: React.FC = () => {
           selectedState={selectedState}
           onStateSelect={setSelectedState}
           featureCounts={featureCounts}
+          allRegions={allRegions}
+          selectedRegion={selectedRegion}
+          onRegionSelect={setSelectedRegion}
         />
 
         {/* Product & Feature Cards */}
@@ -185,7 +211,7 @@ export const StatusPage: React.FC = () => {
           )}
 
           {displayedStatuses.map((status) => {
-            const filteredFeatures = getFilteredFeatures(status.features);
+            const filteredFeatures = getFilteredFeatures(status);
             const linkedIncidents = incidents.filter(
               (inc) =>
                 inc.active &&

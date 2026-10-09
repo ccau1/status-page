@@ -155,10 +155,35 @@ export const FALLBACK_STATUSES: Status[] = [
         message: 'Queues clearing at normal cadence',
       },
     },
+    regional_features: {
+      'us-east-1': {
+        'tax-calc': {
+          id: 'tax-calc',
+          name: 'Dynamic Tax Jurisdiction Engine',
+          region: 'us-east-1',
+          state: 'operational',
+          last_checked: new Date().toISOString(),
+          latency_ms: 180,
+          message: 'US tax authority responding normally',
+        },
+      },
+      'eu-west-1': {
+        'tax-calc': {
+          id: 'tax-calc',
+          name: 'Dynamic Tax Jurisdiction Engine',
+          region: 'eu-west-1',
+          state: 'degraded',
+          last_checked: new Date().toISOString(),
+          latency_ms: 820,
+          message: 'Upstream vendor API responding with elevated latency',
+        },
+      },
+    },
     check_results: [
       {
         check_id: 'chk-tax-1',
         feature: 'tax-calc',
+        region: 'eu-west-1',
         type: 'http',
         success: true,
         state: 'degraded',

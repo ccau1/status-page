@@ -92,6 +92,9 @@ export const ProductStatusCard: React.FC<ProductStatusCardProps> = ({
                     [{c.type.toUpperCase()}] {c.check_id}
                   </span>
                   <span style={{ color: 'var(--text-dim)' }}>&bull; Feature: {c.feature}</span>
+                  {c.region && (
+                    <span style={{ color: 'var(--text-dim)' }}> &bull; Region: {c.region}</span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                   <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{c.latency_ms}ms</span>

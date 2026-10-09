@@ -27,6 +27,10 @@ type StoragePort interface {
 	// SaveStatus saves or updates a status record.
 	SaveStatus(ctx context.Context, status *domain.Status) error
 
+	// ClaimStatus attempts to acquire an exclusive evaluation lease on a status item for leaseDuration.
+	// Returns true if the lease was acquired, or false if already claimed by another active worker.
+	ClaimStatus(ctx context.Context, tenant string, product string, workerID string, leaseDuration time.Duration) (bool, error)
+
 	// GetActiveIncidents retrieves active incident banners for a tenant (or global).
 	GetActiveIncidents(ctx context.Context, tenant string) ([]domain.Incident, error)
 

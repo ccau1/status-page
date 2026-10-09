@@ -147,3 +147,59 @@ describe('StatusPage in-page feature filtering', () => {
     expect(screen.queryByText('OAuth 2.0 & OIDC Provider')).toBeNull();
   });
 });
+
+describe('StatusPage region filtering', () => {
+  const renderPage = () =>
+    render(
+      <MemoryRouter initialEntries={['/default/en/status']}>
+        <Routes>
+          <Route path="/:tenant/:locale/status" element={<StatusPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+  it('shows region filter chips when regional data exists', () => {
+    renderPage();
+
+    expect(screen.getByRole('button', { name: 'All Regions' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'us-east-1' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'eu-west-1' })).toBeDefined();
+  });
+
+  it('overrides feature state with regional data when a region is selected', () => {
+    renderPage();
+
+    // Default (All Regions): global worst-case rollup shows the degraded warning
+    expect(screen.getByText(/Upstream vendor API responding with elevated latency/)).toBeDefined();
+
+    // us-east-1 is operational: the degraded warning disappears and a region badge shows
+    fireEvent.click(screen.getByRole('button', { name: 'us-east-1' }));
+    expect(screen.queryByText(/Upstream vendor API responding with elevated latency/)).toBeNull();
+    expect(screen.getByText('Dynamic Tax Jurisdiction Engine')).toBeDefined();
+
+    // eu-west-1 is degraded: the warning returns
+    fireEvent.click(screen.getByRole('button', { name: 'eu-west-1' }));
+    expect(screen.getByText(/Upstream vendor API responding with elevated latency/)).toBeDefined();
+  });
+
+  it('keeps features without regional checks visible under a region filter', () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'us-east-1' }));
+
+    // stripe-connector / api-gateway have no regional checks: global state still shown
+    expect(screen.getByText('Payment Processing Gateway')).toBeDefined();
+    expect(screen.getByText('API Gateway Routing')).toBeDefined();
+  });
+
+  it('updates feature state counts when a region is selected', () => {
+    renderPage();
+
+    // Globally: 1 degraded feature (tax-calc worst-case rollup)
+    expect(screen.getByRole('button', { name: /Degraded/ }).textContent).toContain('1');
+
+    // In us-east-1 everything is operational
+    fireEvent.click(screen.getByRole('button', { name: 'us-east-1' }));
+    expect(screen.getByRole('button', { name: /Degraded/ }).textContent).toContain('0');
+  });
+});

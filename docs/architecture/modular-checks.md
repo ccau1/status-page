@@ -51,6 +51,17 @@ type Checker interface {
   * `parameters["simulated_latency_ms"]`: Artificial delay to simulate network latency
   * `parameters["message"]`: Custom status message
 
+### 5. `playwright` (`packages/core/checks/playwright.go`)
+* **Purpose:** Executes headless browser synthetic user journeys via the stateless Playwright runner service (`packages/playwright-runner`).
+* **Supported Parameters:**
+  * `target`: URL to navigate to (e.g. `https://app.acme.com/login`)
+  * `timeout_ms`: Navigation and scenario timeout in milliseconds
+  * `parameters["scenario"]`: Scenario name (`page-load`, `api-ping`, or custom scenario, defaults to `page-load`)
+  * `parameters["selector"]`: CSS/XPath selector to wait for on the page
+  * `parameters["expected_text"]`: Required text content expected on the page
+  * `parameters["degraded_latency_ms"]`: Latency threshold above which the check reports degraded state
+  * `parameters["runner_url"]`: Optional override for the Playwright runner service endpoint
+
 ---
 
 ## 🛠 Adding a Custom Checker

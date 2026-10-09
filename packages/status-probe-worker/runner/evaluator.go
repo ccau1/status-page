@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"sync"
 	"time"
@@ -30,9 +31,24 @@ func NewEvaluator(storage ports.StoragePort, reg *checks.Registry, cfg *config.W
 	}
 }
 
+// IsResponsibleForShard checks if this worker instance is responsible for evaluating the given tenant and product.
+func (e *Evaluator) IsResponsibleForShard(tenant, product string) bool {
+	if e.cfg == nil || e.cfg.WorkerShardTotal <= 1 {
+		return true
+	}
+	h := fnv.New32a()
+	h.Write([]byte(tenant + "/" + product))
+	shard := int(h.Sum32() % uint32(e.cfg.WorkerShardTotal))
+	return shard == e.cfg.WorkerShardIndex
+}
+
 // SyncInitialStatuses ensures all configured status items exist in the database.
 func (e *Evaluator) SyncInitialStatuses(ctx context.Context) error {
 	for _, item := range e.cfg.Items {
+		if !e.IsResponsibleForShard(item.Tenant, item.Product) {
+			continue
+		}
+
 		existing, err := e.storage.GetStatus(ctx, item.Tenant, item.Product)
 		if err != nil {
 			return fmt.Errorf("failed to check existing status for %s/%s: %w", item.Tenant, item.Product, err)
@@ -60,6 +76,11 @@ func (e *Evaluator) EvaluateLoopIteration(ctx context.Context) (int, error) {
 	updatedCount := 0
 
 	for _, item := range e.cfg.Items {
+		// 1. Shard partition check (EKS StatefulSet / static sharding)
+		if !e.IsResponsibleForShard(item.Tenant, item.Product) {
+			continue
+		}
+
 		st, err := e.storage.GetStatus(ctx, item.Tenant, item.Product)
 		if err != nil {
 			log.Printf("[Worker] Error getting status for %s/%s: %v", item.Tenant, item.Product, err)
@@ -71,6 +92,19 @@ func (e *Evaluator) EvaluateLoopIteration(ctx context.Context) (int, error) {
 
 		if !isOutdated {
 			continue
+		}
+
+		// 2. Dynamic Lease check (ECS task autoscaling / EKS multi-replica Deployment)
+		if e.cfg != nil && e.cfg.WorkerLeaseEnabled {
+			claimed, err := e.storage.ClaimStatus(ctx, item.Tenant, item.Product, e.cfg.WorkerID, e.cfg.WorkerLeaseDuration)
+			if err != nil {
+				log.Printf("[Worker] Lease claim error for %s/%s: %v", item.Tenant, item.Product, err)
+				continue
+			}
+			if !claimed {
+				// Actively leased by another pod/task
+				continue
+			}
 		}
 
 		if err := e.evaluateSingleProduct(ctx, item); err != nil {
@@ -100,32 +134,17 @@ func (e *Evaluator) evaluateSingleProduct(ctx context.Context, item domain.Statu
 
 	// Aggregate check results into features
 	features := make(map[string]domain.FeatureStatus)
+	regional := make(map[string]map[string]domain.FeatureStatus)
 	for _, res := range results {
-		feat, exists := features[res.Feature]
-		if !exists {
-			feat = domain.FeatureStatus{
-				ID:          res.Feature,
-				Name:        formatFeatureName(res.Feature),
-				State:       res.State,
-				LastChecked: res.Timestamp,
-				LatencyMs:   res.LatencyMs,
-				Message:     res.Message,
+		mergeCheckResult(features, res, "")
+		if res.Region != "" {
+			regionFeats, ok := regional[res.Region]
+			if !ok {
+				regionFeats = make(map[string]domain.FeatureStatus)
+				regional[res.Region] = regionFeats
 			}
-		} else {
-			// If existing is operational but this check failed, escalate state
-			if res.State == domain.StateOutage {
-				feat.State = domain.StateOutage
-				feat.Message = res.Message
-			} else if res.State == domain.StateDegraded && feat.State != domain.StateOutage {
-				feat.State = domain.StateDegraded
-				feat.Message = res.Message
-			}
-			if res.LatencyMs > feat.LatencyMs {
-				feat.LatencyMs = res.LatencyMs
-			}
-			feat.LastChecked = res.Timestamp
+			mergeCheckResult(regionFeats, res, res.Region)
 		}
-		features[res.Feature] = feat
 	}
 
 	overallState := domain.CalculateOverallState(features)
@@ -148,6 +167,9 @@ func (e *Evaluator) evaluateSingleProduct(ctx context.Context, item domain.Statu
 		CheckResults: results,
 		LastUpdated:  time.Now().UTC(),
 	}
+	if len(regional) > 0 {
+		newStatus.RegionalFeatures = regional
+	}
 
 	if err := e.storage.SaveStatus(ctx, newStatus); err != nil {
 		return fmt.Errorf("failed to save evaluated status: %w", err)
@@ -157,6 +179,38 @@ func (e *Evaluator) evaluateSingleProduct(ctx context.Context, item domain.Statu
 		item.Tenant, item.Product, overallState, len(features), len(results))
 
 	return nil
+}
+
+// mergeCheckResult folds a check result into a feature map, escalating to the
+// worst observed state and keeping the max latency and latest timestamp.
+// region is stamped on newly created feature entries ("" for the global rollup).
+func mergeCheckResult(features map[string]domain.FeatureStatus, res domain.CheckResult, region string) {
+	feat, exists := features[res.Feature]
+	if !exists {
+		feat = domain.FeatureStatus{
+			ID:          res.Feature,
+			Name:        formatFeatureName(res.Feature),
+			Region:      region,
+			State:       res.State,
+			LastChecked: res.Timestamp,
+			LatencyMs:   res.LatencyMs,
+			Message:     res.Message,
+		}
+	} else {
+		// If existing is operational but this check failed, escalate state
+		if res.State == domain.StateOutage {
+			feat.State = domain.StateOutage
+			feat.Message = res.Message
+		} else if res.State == domain.StateDegraded && feat.State != domain.StateOutage {
+			feat.State = domain.StateDegraded
+			feat.Message = res.Message
+		}
+		if res.LatencyMs > feat.LatencyMs {
+			feat.LatencyMs = res.LatencyMs
+		}
+		feat.LastChecked = res.Timestamp
+	}
+	features[res.Feature] = feat
 }
 
 func formatFeatureName(raw string) string {

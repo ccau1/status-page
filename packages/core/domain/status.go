@@ -21,6 +21,7 @@ type FeatureStatus struct {
 	ID          string      `json:"id"`
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
+	Region      string      `json:"region,omitempty"` // set when this entry reflects a single region
 	State       StatusState `json:"state"`
 	LastChecked time.Time   `json:"last_checked"`
 	LatencyMs   int64       `json:"latency_ms,omitempty"`
@@ -31,6 +32,7 @@ type FeatureStatus struct {
 type CheckDefinition struct {
 	ID             string            `json:"id"`
 	Feature        string            `json:"feature"` // The feature key this check validates
+	Region         string            `json:"region,omitempty"` // Optional region tag for per-region visibility
 	Type           string            `json:"type"`    // "http", "tcp", "dns", etc.
 	Target         string            `json:"target"`  // URL, hostname:port, etc.
 	TimeoutMs      int               `json:"timeout_ms,omitempty"`
@@ -43,6 +45,7 @@ type CheckDefinition struct {
 type CheckResult struct {
 	CheckID   string      `json:"check_id"`
 	Feature   string      `json:"feature"`
+	Region    string      `json:"region,omitempty"` // Region tag inherited from the check definition
 	Type      string      `json:"type"`
 	Success   bool        `json:"success"`
 	State     StatusState `json:"state"`
@@ -58,8 +61,11 @@ type Status struct {
 	CurrentState StatusState              `json:"current_state"`
 	Message      string                   `json:"message,omitempty"`
 	Features     map[string]FeatureStatus `json:"features"`
-	LastUpdated  time.Time                `json:"last_updated"`
-	CheckResults []CheckResult            `json:"check_results,omitempty"`
+	// RegionalFeatures holds per-region feature states: region -> feature ID -> status.
+	// Populated only when checks carry a region tag; Features remains the global rollup.
+	RegionalFeatures map[string]map[string]FeatureStatus `json:"regional_features,omitempty"`
+	LastUpdated      time.Time                           `json:"last_updated"`
+	CheckResults     []CheckResult                       `json:"check_results,omitempty"`
 }
 
 // StatusItemConfig describes the configuration of a status item in the environment JSON.

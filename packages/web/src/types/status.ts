@@ -4,6 +4,7 @@ export interface FeatureStatus {
   id: string;
   name: string;
   description?: string;
+  region?: string;
   state: StatusState;
   last_checked: string;
   latency_ms?: number;
@@ -13,6 +14,7 @@ export interface FeatureStatus {
 export interface CheckResult {
   check_id: string;
   feature: string;
+  region?: string;
   type: string;
   success: boolean;
   state: StatusState;
@@ -27,6 +29,7 @@ export interface Status {
   current_state: StatusState;
   message?: string;
   features: Record<string, FeatureStatus>;
+  regional_features?: Record<string, Record<string, FeatureStatus>>;
   last_updated: string;
   check_results?: CheckResult[];
 }

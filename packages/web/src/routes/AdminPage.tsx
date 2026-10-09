@@ -750,7 +750,8 @@ export const AdminPage: React.FC = () => {
                   'oidc-jwks-check',
                   'session-cache-check',
                   'stripe-webhook-check',
-                  'tax-jurisdiction-check',
+                  'tax-jurisdiction-check-us',
+                  'tax-jurisdiction-check-eu',
                 ].map((cid) => {
                   const isSelected = selectedChecks.includes(cid);
                   return (

@@ -80,6 +80,7 @@ func ExecuteCheck(ctx context.Context, reg *Registry, def domain.CheckDefinition
 		return domain.CheckResult{
 			CheckID:   def.ID,
 			Feature:   def.Feature,
+			Region:    def.Region,
 			Type:      def.Type,
 			Success:   false,
 			State:     domain.StateOutage,
@@ -103,6 +104,7 @@ func ExecuteCheck(ctx context.Context, reg *Registry, def domain.CheckDefinition
 
 	res.CheckID = def.ID
 	res.Feature = def.Feature
+	res.Region = def.Region
 	res.Type = def.Type
 	res.LatencyMs = latency
 	res.Timestamp = time.Now().UTC()
